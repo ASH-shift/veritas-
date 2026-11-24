@@ -9,7 +9,7 @@ import argparse
 import asyncio
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.core.logging import get_logger, setup_logging
 from app.db.models import Chunk, Document, DocumentStatus, Workspace
@@ -115,8 +115,41 @@ async def ingest_directory(docs_dir: Path, workspace_id: int) -> None:
             await ingest_file(path, workspace_id, session)
 
 
+# One upload is ingested at a time: two concurrent embeddings would double the
+# memory spike on a 512 MB instance. Later uploads wait in "pending".
+_INGEST_LOCK = asyncio.Lock()
+
+INTERRUPTED_ERROR = "Processing was interrupted (server restarted). Please upload the file again."
+
+
+async def mark_interrupted_documents() -> int:
+    """
+    Called at startup. Background ingestion runs in-process, so a restart (e.g.
+    an out-of-memory kill) loses any upload that was pending or processing.
+    Mark those as failed with a clear message instead of leaving them "Queued"
+    forever. Safe because the app runs a single worker: at startup nothing can
+    be mid-ingestion.
+    """
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            update(Document)
+            .where(Document.status.in_([DocumentStatus.pending, DocumentStatus.processing]))
+            .values(status=DocumentStatus.failed, error=INTERRUPTED_ERROR)
+        )
+        await session.commit()
+    count = result.rowcount or 0  # type: ignore[attr-defined]
+    if count:
+        log.warning("Marked %d interrupted document(s) as failed", count)
+    return count
+
+
 async def run_background_ingestion(document_id: int, file_bytes: bytes, filename: str) -> None:
     """Background task for API-uploaded documents."""
+    async with _INGEST_LOCK:
+        await _ingest_uploaded(document_id, file_bytes, filename)
+
+
+async def _ingest_uploaded(document_id: int, file_bytes: bytes, filename: str) -> None:
     import tempfile
 
     suffix = Path(filename).suffix.lower()
@@ -133,16 +166,18 @@ async def run_background_ingestion(document_id: int, file_bytes: bytes, filename
             )
             doc = result.scalar_one()
 
+            # Commit (not just flush) so the UI can show "Processing".
             doc.status = DocumentStatus.processing
-            await session.flush()
+            await session.commit()
 
             try:
-                pages = load_document(tmp_path)
+                # PDF parsing and chunking are CPU-bound; run them in a thread
+                # so the event loop keeps serving other requests (status polls).
+                pages = await asyncio.to_thread(load_document, tmp_path)
                 if not pages:
                     raise ValueError("Document produced no text after loading")
 
-                chunker = Chunker()
-                chunk_data_list = chunker.chunk(pages, mime_type)
+                chunk_data_list = await asyncio.to_thread(Chunker().chunk, pages, mime_type)
                 if not chunk_data_list:
                     raise ValueError("Document produced no chunks")
 

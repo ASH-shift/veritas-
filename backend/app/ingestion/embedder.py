@@ -6,8 +6,12 @@ from app.core.logging import get_logger
 log = get_logger(__name__)
 
 MODEL_NAME = "BAAI/bge-small-en-v1.5"
-# Small batches + one ONNX thread keep peak memory low on 512 MB free tiers.
-EMBED_BATCH_SIZE = 8
+# Memory per ONNX batch, measured in the production image embedding 144
+# full-length chunks (model alone ≈ 268 MB): batch 8 → +166 MB, 4 → +71 MB,
+# 2 → +23 MB, 1 → +3 MB, all in ~52–58 s on one thread. Batch 8 pushed a
+# 77-page PDF upload past Render's 512 MB limit (OOM restart), so embed one
+# text at a time — same speed on a single thread, almost no extra memory.
+EMBED_BATCH_SIZE = 1
 ONNX_THREADS = 1
 
 

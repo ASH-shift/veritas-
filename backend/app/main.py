@@ -1,5 +1,6 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from urllib.parse import urlsplit
 
 import redis.asyncio as aioredis
 from fastapi import FastAPI
@@ -16,7 +17,14 @@ log = get_logger(__name__)
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     setup_logging()
     app.state.redis = aioredis.from_url(settings.redis_url, decode_responses=True)
-    log.info("Redis connection pool created: %s", settings.redis_url)
+    # Log only the host — the URL contains the Redis password.
+    log.info("Redis connection pool created: %s", urlsplit(settings.redis_url).hostname)
+    try:
+        from app.ingestion.pipeline import mark_interrupted_documents
+
+        await mark_interrupted_documents()
+    except Exception as exc:  # DB unreachable at boot must not stop the app
+        log.warning("Could not check for interrupted uploads: %s", exc)
     yield
     await app.state.redis.aclose()
     log.info("Redis connection pool closed")

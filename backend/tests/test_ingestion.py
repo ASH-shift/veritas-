@@ -258,3 +258,60 @@ def test_real_sample_doc_pdf():
     chunks = chunker.chunk(pages, "application/pdf")
     assert len(chunks) >= 1
     assert all(c.page_number is not None for c in chunks)
+
+
+# ── Upload robustness (memory / restarts) ─────────────────────────────────────
+
+
+def test_embed_batch_size_is_one_for_memory():
+    from app.ingestion import embedder
+
+    assert embedder.EMBED_BATCH_SIZE == 1
+
+
+@pytest.mark.asyncio
+async def test_mark_interrupted_documents_marks_pending_and_processing_failed():
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from app.ingestion import pipeline
+
+    session = MagicMock()
+    result = MagicMock(rowcount=2)
+    session.execute = AsyncMock(return_value=result)
+    session.commit = AsyncMock()
+    cm = MagicMock()
+    cm.__aenter__ = AsyncMock(return_value=session)
+    cm.__aexit__ = AsyncMock(return_value=False)
+
+    with patch.object(pipeline, "AsyncSessionLocal", return_value=cm):
+        count = await pipeline.mark_interrupted_documents()
+
+    assert count == 2
+    sql = str(session.execute.await_args.args[0].compile(compile_kwargs={"literal_binds": True}))
+    assert "UPDATE documents" in sql
+    assert "pending" in sql and "processing" in sql
+    session.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_background_ingestion_runs_one_at_a_time():
+    import asyncio
+    from unittest.mock import patch
+
+    from app.ingestion import pipeline
+
+    running = 0
+    max_running = 0
+
+    async def fake_ingest(*args):
+        nonlocal running, max_running
+        running += 1
+        max_running = max(max_running, running)
+        await asyncio.sleep(0.01)
+        running -= 1
+
+    with patch.object(pipeline, "_ingest_uploaded", side_effect=fake_ingest):
+        await asyncio.gather(
+            *(pipeline.run_background_ingestion(i, b"x", "a.md") for i in range(3))
+        )
+    assert max_running == 1
