@@ -155,7 +155,7 @@ async def check_cache_node(state: AgentState, config: RunnableConfig) -> dict:
         cached = await get_exact(query, workspace_id, redis_client)
         if cached:
             log.debug("check_cache: exact HIT workspace=%d", workspace_id)
-            return {"cache_hit": True, "answer": cached["answer"]}
+            return {"cache_hit": True, "answer": cached["answer"], "cached_citations": cached.get("citations", [])}
 
     # 2. Semantic cache (pgvector) ── embed once, store for write_cache reuse
     embedding: list | None = None
@@ -169,7 +169,12 @@ async def check_cache_node(state: AgentState, config: RunnableConfig) -> dict:
         cached = await get_semantic(embedding, workspace_id, session)
         if cached:
             log.debug("check_cache: semantic HIT workspace=%d", workspace_id)
-            return {"cache_hit": True, "answer": cached["answer"], "query_embedding": embedding}
+            return {
+                "cache_hit": True,
+                "answer": cached["answer"],
+                "cached_citations": cached.get("citations", []),
+                "query_embedding": embedding,
+            }
 
     return {"cache_hit": False, "query_embedding": embedding}
 
@@ -689,6 +694,19 @@ def _extract_citations(answer: str, chunks: list) -> list[AgenticCitation]:
     return result
 
 
+def _cited_subset(answer: str, cached: list[dict]) -> list[dict]:
+    """Keep cached citations that the answer actually cites, one per (doc, page)."""
+    cited = {(m.group(1), int(m.group(2))) for m in _CITATION_RE.finditer(answer)}
+    result: list[dict] = []
+    seen: set[tuple[str, int]] = set()
+    for c in cached:
+        key = (str(c.get("filename", "")).rsplit(".", 1)[0], int(c.get("page") or 1))
+        if key in cited and key not in seen:
+            seen.add(key)
+            result.append(c)
+    return result
+
+
 async def agentic_rag(
     query: str,
     workspace_id: int,
@@ -779,16 +797,17 @@ async def agentic_rag(
             token = word if i == 0 else " " + word
             yield {"type": "token", "content": token}
 
-    # Citations
-    all_chunks = final_state.get("relevant_chunks") or final_state.get("chunks", [])
-    citations = _extract_citations(answer, all_chunks)
-    yield {
-        "type": "citations",
-        "citations": [
+    # Citations — a cache hit skips retrieval, so use the citations stored
+    # with the cached answer instead of extracting them from chunks.
+    if final_state.get("cache_hit"):
+        citation_dicts = _cited_subset(answer, final_state.get("cached_citations") or [])
+    else:
+        all_chunks = final_state.get("relevant_chunks") or final_state.get("chunks", [])
+        citation_dicts = [
             {"filename": c.filename, "page": c.page, "snippet": c.snippet}
-            for c in citations
-        ],
-    }
+            for c in _extract_citations(answer, all_chunks)
+        ]
+    yield {"type": "citations", "citations": citation_dicts}
 
     latency_ms = int((time.monotonic() - t_start) * 1000)
     total_tokens = final_state.get("total_tokens", 0)

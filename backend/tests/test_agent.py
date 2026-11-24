@@ -580,3 +580,43 @@ async def test_agentic_rag_handles_none_node_updates():
     answer = "".join(e["content"] for e in events if e["type"] == "token")
     assert answer == "18 days [leave_policy:1]"
     assert events[-1]["type"] == "done"
+
+
+def test_cited_subset_keeps_only_cited_citations():
+    from app.agent.graph import _cited_subset
+
+    cached = [
+        {"filename": "leave_policy.md", "page": 1, "snippet": "18 days"},
+        {"filename": "hr_policy.md", "page": 1, "snippet": "unrelated"},
+        {"filename": "leave_policy.md", "page": 1, "snippet": "duplicate"},
+    ]
+    out = _cited_subset("You get 18 days [leave_policy:1].", cached)
+    assert out == [{"filename": "leave_policy.md", "page": 1, "snippet": "18 days"}]
+
+
+@pytest.mark.asyncio
+async def test_agentic_rag_cache_hit_returns_cached_citations():
+    from unittest.mock import patch as _patch
+
+    from app.agent import graph as graph_mod
+
+    class FakeGraph:
+        async def astream(self, state, config=None, stream_mode=None):
+            yield {
+                "check_cache": {
+                    "cache_hit": True,
+                    "answer": "18 days [leave_policy:1]",
+                    "cached_citations": [{"filename": "leave_policy.md", "page": 1, "snippet": "s"}],
+                }
+            }
+
+    with (
+        _patch.object(graph_mod.settings, "groq_api_key", "test-key"),
+        _patch.object(graph_mod, "build_graph", return_value=FakeGraph()),
+        _patch("app.observability.query_logger.log_query", new=AsyncMock()),
+    ):
+        events = [e async for e in graph_mod.agentic_rag("q", 1, MagicMock())]
+
+    cites = next(e for e in events if e["type"] == "citations")["citations"]
+    assert cites == [{"filename": "leave_policy.md", "page": 1, "snippet": "s"}]
+    assert events[-1]["cache_hit"] is True

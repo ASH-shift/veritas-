@@ -40,3 +40,4 @@ class AgentState(TypedDict, total=False):
     # ── Cache ─────────────────────────────────────────────────────────────────
     cache_hit: bool
     query_embedding: list  # list[float] — stored by check_cache for write_cache reuse
+    cached_citations: list  # [{filename, page, snippet}] returned with a cache hit
