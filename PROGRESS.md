@@ -451,9 +451,9 @@ All documents contain specific, verifiable facts (numbers, dates, rules) for the
 - 500 responses from unhandled exceptions have no CORS headers, so the browser reports them as network errors; the UI message covers both cases
 - Header shows a blank placeholder until localStorage is read, to avoid a logged-out flash
 
-## Phase 11 — CI, Docker, Deployment 🟡
+## Phase 11 — CI, Docker, Deployment ✅
 
-**Status:** Built and verified locally; CI run and live deploy waiting on GitHub repo + free accounts | **Date:** 2026-11-24
+**Status:** Complete — live at https://veritas-beta-black.vercel.app (API: https://veritas-yyuo.onrender.com) | **Date:** 2026-11-24
 
 ### What was built
 - `.github/workflows/ci.yml` — **backend** (ruff, mypy on `app/core app/db app/api`, pytest on Python 3.11), **frontend** (npm ci, lint, build), **eval-gate** (pgvector + Redis services → migrate → ingest → 20-question `hybrid_rerank` eval → `evals/gate.py`; skipped when `GROQ_API_KEY` secret is absent)
@@ -468,8 +468,8 @@ All documents contain specific, verifiable facts (numbers, dates, rules) for the
 ### Acceptance criteria
 - [x] ruff clean, mypy clean, **259/259** tests pass, frontend lint + build pass (locally)
 - [x] Production image builds and runs under 512 MB with real retrieval + reranking
-- [ ] CI green on GitHub — needs the repo pushed
-- [ ] Deploy verified on Neon / Upstash / HF Spaces / Vercel — needs accounts
+- [x] CI green on GitHub (backend, frontend, eval gate — gate skips until the GROQ_API_KEY secret is added)
+- [x] Deployed and verified: Neon (pgvector, 18 demo docs ingested), Upstash Redis, Render free (Docker; Hugging Face Docker Spaces became paid), Vercel. Checked /health (db + redis ok, environment=production), /docs hidden, CORS allow-list, demo chat with citations, cache hit ~0.6 s vs ~16 s uncached
 - [ ] Eval baseline recorded — needs `GROQ_API_KEY`
 
 ### Known issues / notes
