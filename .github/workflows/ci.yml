@@ -79,6 +79,8 @@ jobs:
     steps:
       - name: Skip notice
         if: env.GROQ_API_KEY == ''
+        # No checkout happens when skipping, so don't use the backend/ default dir.
+        working-directory: ${{ github.workspace }}
         run: echo "GROQ_API_KEY secret not set — skipping eval gate."
       - uses: actions/checkout@v4
         if: env.GROQ_API_KEY != ''
