@@ -41,3 +41,4 @@ class AgentState(TypedDict, total=False):
     cache_hit: bool
     query_embedding: list  # list[float] — stored by check_cache for write_cache reuse
     cached_citations: list  # [{filename, page, snippet}] returned with a cache hit
+    llm_busy: bool  # True when every Groq model was rate limited

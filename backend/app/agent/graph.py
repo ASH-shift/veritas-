@@ -36,7 +36,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, StateGraph
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent.llm_params import reasoning_kwargs
+from app.agent.llm_client import BUSY_MESSAGE, LLMBusyError, create_with_fallback
 from app.agent.prompts import PROMPT_VERSION, build_rag_messages, normalize_citations
 from app.agent.state import AgentState
 from app.core.config import settings
@@ -47,7 +47,6 @@ log = get_logger(__name__)
 NOT_FOUND_PHRASE = "I couldn't find this in the documents."
 _CITATION_RE = re.compile(r"\[([^\]:\s]+):(\d+)\]")
 _MAX_LLM_RETRIES = 3
-_RETRY_BASE = 2.0
 
 
 # ── Shared helpers ─────────────────────────────────────────────────────────────
@@ -62,23 +61,31 @@ def _parse_json(text: str) -> dict:
     return json.loads(m.group(0) if m else text)
 
 
+def _fallback_models(model: str) -> list[str]:
+    """Preferred model first, then the other configured model (separate rate limits)."""
+    return [model, settings.llm_fast_model, settings.llm_model]
+
+
 async def _json_llm_call(client: AsyncGroq, model: str, prompt: str) -> dict:
-    """Call Groq and parse JSON response; exponential backoff on 429."""
+    """
+    Call Groq and parse a JSON response. Rate limits fall back to the other
+    model; if all are limited, return {} at once so callers use their defaults.
+    """
     for attempt in range(_MAX_LLM_RETRIES):
         try:
-            resp = await client.chat.completions.create(
-                model=model,
+            resp = await create_with_fallback(
+                client,
+                _fallback_models(model),
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.0,
                 max_tokens=512,
-                **reasoning_kwargs(model),
             )
             return _parse_json(resp.choices[0].message.content or "{}")
+        except LLMBusyError as exc:
+            log.warning("LLM JSON call skipped: %s", exc)
+            return {}
         except Exception as exc:
-            status = getattr(exc, "status_code", None)
-            if status == 429:
-                await asyncio.sleep(_RETRY_BASE ** (attempt + 1))
-            elif attempt < _MAX_LLM_RETRIES - 1:
+            if attempt < _MAX_LLM_RETRIES - 1:
                 await asyncio.sleep(1.0)
             else:
                 log.warning("LLM JSON call failed after %d retries: %s", _MAX_LLM_RETRIES, exc)
@@ -220,12 +227,12 @@ async def rewrite_query_node(state: AgentState, config: RunnableConfig) -> dict:
     )
 
     try:
-        resp = await client.chat.completions.create(
-            model=settings.llm_fast_model,
+        resp = await create_with_fallback(
+            client,
+            _fallback_models(settings.llm_fast_model),
             messages=[{"role": "user", "content": prompt}],
             temperature=0.0,
             max_tokens=512,
-            **reasoning_kwargs(settings.llm_fast_model),
         )
         rewritten = (resp.choices[0].message.content or original).strip().strip('"')
         log.debug("rewrite_query: %r → %r", original, rewritten)
@@ -386,15 +393,15 @@ async def generate_answer_node(state: AgentState, config: RunnableConfig) -> dic
         if client is None:
             return {**base_return, "answer": "Hello! How can I help?", "grounded": True, "total_tokens": 0}
         try:
-            resp = await client.chat.completions.create(
-                model=settings.llm_fast_model,
+            resp = await create_with_fallback(
+                client,
+                _fallback_models(settings.llm_fast_model),
                 messages=[
                     {"role": "system", "content": "You are Veritas, a friendly AI assistant. Respond briefly to casual messages."},
                     {"role": "user", "content": query},
                 ],
                 temperature=0.7,
                 max_tokens=512,
-                **reasoning_kwargs(settings.llm_fast_model),
             )
             answer = resp.choices[0].message.content or "Hello!"
             tokens = resp.usage.total_tokens if resp.usage else 0
@@ -422,22 +429,29 @@ async def generate_answer_node(state: AgentState, config: RunnableConfig) -> dic
 
     for attempt in range(_MAX_LLM_RETRIES):
         try:
-            resp = await client.chat.completions.create(
-                model=settings.llm_model,
-                messages=messages,  # type: ignore[arg-type]
+            resp = await create_with_fallback(
+                client,
+                _fallback_models(settings.llm_model),
+                messages=messages,
                 temperature=0.1,
                 max_tokens=1024,
-                **reasoning_kwargs(settings.llm_model),
             )
             answer = normalize_citations(resp.choices[0].message.content or NOT_FOUND_PHRASE)
             tokens = resp.usage.total_tokens if resp.usage else 0
             log.debug("generate_answer: %d tokens, strict=%s", tokens, use_strict)
             return {**base_return, "answer": answer, "total_tokens": tokens}
+        except LLMBusyError as exc:
+            # Every model is rate limited: say so plainly instead of a refusal.
+            log.warning("generate_answer: %s", exc)
+            return {
+                **base_return,
+                "answer": BUSY_MESSAGE,
+                "llm_busy": True,
+                "grounded": True,
+                "total_tokens": 0,
+            }
         except Exception as exc:
-            status = getattr(exc, "status_code", None)
-            if status == 429:
-                await asyncio.sleep(_RETRY_BASE ** (attempt + 1))
-            elif attempt < _MAX_LLM_RETRIES - 1:
+            if attempt < _MAX_LLM_RETRIES - 1:
                 await asyncio.sleep(1.0)
             else:
                 log.error("generate_answer failed: %s", exc)
@@ -472,7 +486,7 @@ async def check_groundedness_node(state: AgentState, config: RunnableConfig) -> 
     answer = state.get("answer", "")
     relevant_chunks = state.get("relevant_chunks") or state.get("chunks", [])
 
-    if NOT_FOUND_PHRASE.lower() in answer.lower():
+    if NOT_FOUND_PHRASE.lower() in answer.lower() or state.get("llm_busy"):
         return {"grounded": True, "use_strict_prompt": False}
 
     if client is None or not relevant_chunks:
@@ -535,7 +549,7 @@ async def write_cache_node(state: AgentState, config: RunnableConfig) -> dict:
     Write the final answer to Redis exact cache and pgvector semantic cache.
     Skips: cache hits (already stored), NOT_FOUND answers, non-knowledge-base routes.
     """
-    if state.get("cache_hit"):
+    if state.get("cache_hit") or state.get("llm_busy"):
         return {}
 
     route = state.get("route", "knowledge_base")

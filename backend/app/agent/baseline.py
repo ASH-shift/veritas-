@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from groq import AsyncGroq
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent.llm_params import reasoning_kwargs
+from app.agent.llm_client import BUSY_MESSAGE, LLMBusyError, create_with_fallback
 from app.agent.prompts import PROMPT_VERSION, build_rag_messages, normalize_citations
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -144,14 +144,14 @@ async def baseline_rag(
     completion_tokens = 0
 
     try:
-        stream = await client.chat.completions.create(
-            model=settings.llm_model,
+        stream = await create_with_fallback(
+            client,
+            [settings.llm_model, settings.llm_fast_model],
             messages=messages,
             stream=True,
             stream_options={"include_usage": True},
             temperature=0.1,
             max_tokens=1024,
-            **reasoning_kwargs(settings.llm_model),
         )
 
         async for chunk in stream:
@@ -164,6 +164,10 @@ async def baseline_rag(
                 prompt_tokens = chunk.usage.prompt_tokens
                 completion_tokens = chunk.usage.completion_tokens
 
+    except LLMBusyError as exc:
+        log.warning("LLM generation skipped: %s", exc)
+        yield {"type": "error", "content": BUSY_MESSAGE}
+        return
     except Exception as exc:
         log.error("LLM generation failed: %s", exc)
         yield {"type": "error", "content": f"Generation failed: {exc}"}
