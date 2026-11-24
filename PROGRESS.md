@@ -475,4 +475,27 @@ All documents contain specific, verifiable facts (numbers, dates, rules) for the
 ### Known issues / notes
 - `mypy` must run on Python 3.11/3.12 locally: on 3.13 the installed numpy stubs use 3.12-only syntax when `python_version = "3.11"`
 
-## Phase 12 — README + Portfolio polish ⬜
+## Phase 12 — README + Portfolio polish ✅
+
+**Status:** Complete | **Date:** 2026-11-24
+
+### What was built
+- **Real eval results** on a 30-question stratified sample for all four configs (agentic: faithfulness 100%, citation accuracy 98.3%, refusal accuracy 100%, p50 14.3 s); reports committed and shown on `/evals`
+- `run_evals.py --sample N` (round-robin across question types); API failures excluded and counted instead of scored; failed judge calls → `None`; eval generation uses the same citation normalisation and reasoning settings as the API
+- Bugs found by the evals and fixed: grader/groundedness truncation (300/400 chars) causing false refusals; cached answers leaking into eval runs (`invoke_agentic(use_cache=False)`)
+- Rate-limit resilience for the live demo: Groq 429 → second model → clear "busy" message (never cached)
+- CI eval baseline recorded (`evals/baseline.json`, faithfulness 1.000 on the 20-question gate subset)
+- README rewritten: live links, features, Mermaid architecture + agent graph, eval table with interpretation, tech stack, local setup, eval instructions, Render/Neon/Upstash/Vercel deployment, MCP setup, cold-start note
+- 275 tests passing
+
+### Acceptance criteria
+- [x] One-line pitch, live demo link, cold-start note
+- [x] Architecture and agent graph diagrams (Mermaid)
+- [x] Eval results table from real reports
+- [x] Key decisions linked, local setup, deployment guide, MCP setup
+- [ ] Demo video — to be recorded by the author
+
+### Known issues / notes
+- 30-question sample on a small, clean corpus: configs are near the ceiling; a single miss moves a metric by ~3 points
+- Agentic token counts in reports cover answer generation only
+- Adding the `GROQ_API_KEY` repo secret turns on the CI eval gate, which spends ~60 Groq requests per push

@@ -180,6 +180,23 @@ They were hard-coded to workspace 1 from before auth existed (Phase 1), so any v
 ### D-053 — Fix the workspace sequence in a new migration, not by editing 0001
 0001 may already be applied in some databases, so editing it would not fix them. Migration 0002 calls `setval` on the `workspaces` id sequence, which is safe to run on any database.
 
+## Phase 12
+
+### D-058 — Evaluate a stratified 30-question sample, not the full set
+Groq's free tier allows 8K tokens/minute and 1,000 requests/day per model, shared with the live demo. All 126 questions × 4 configs would need well over 2,000 calls. `--sample N` takes questions round-robin across types (the dataset is grouped by type, so `--limit N` would be all numeric), so every type is represented in a run that fits the quota.
+
+### D-059 — API failures are excluded from metrics, never scored
+A rate-limited generation used to fall back to "I couldn't find this", and a failed judge call to a score of 0 — both silently pulled the averages down. Failed questions are now marked `error`, excluded from aggregation, counted in `errors`, and not cached so a re-run retries them. Failed judge calls return `None`, which the averages skip.
+
+### D-060 — Grader and groundedness check see (almost) the whole chunk
+They received only the first 300 / 400 characters of ~1,800-character chunks. The first agentic eval showed the cost: correct answers discarded as "not relevant" or "not grounded" (refusal and faithfulness both 93.3%). 1,200 / 2,000 characters covers nearly every chunk and stays under the 8K tokens/minute limit; both metrics went to 100%.
+
+### D-061 — Evals bypass the answer caches
+A re-run returned answers cached in pgvector by the previous run, with no retrieved context, so the judge scored faithfulness near 0. `invoke_agentic(use_cache=False)` skips cache reads and writes for evals; that run was discarded.
+
+### D-062 — CI baseline report kept out of the dashboard
+The baseline for the gate is a 20-question `--limit` run (the same command CI uses). Its report lives in `evals/reports/baseline/` so the `/evals` page keeps showing the stratified 30-question results.
+
 ## Phase 11
 
 ### D-054 — Hugging Face Spaces as the recommended backend host, Render as alternative
