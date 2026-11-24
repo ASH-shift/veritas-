@@ -48,6 +48,14 @@ NOT_FOUND_PHRASE = "I couldn't find this in the documents."
 _CITATION_RE = re.compile(r"\[([^\]:\s]+):(\d+)\]")
 _MAX_LLM_RETRIES = 3
 
+# How much of each chunk the grader / groundedness judge see. Chunks are
+# ~450 tokens (~1,800 chars); evals showed 300/400-char cut-offs hid the
+# relevant sentence, causing wrong "not relevant" / "not grounded" verdicts
+# and false refusals. These limits keep the prompts under the free tier's
+# 8K tokens/minute while covering almost every chunk.
+_GRADE_CHARS = 1200
+_GROUNDEDNESS_CHARS = 2000
+
 
 # ── Shared helpers ─────────────────────────────────────────────────────────────
 
@@ -151,6 +159,9 @@ async def check_cache_node(state: AgentState, config: RunnableConfig) -> dict:
     from app.cache.exact_cache import get_exact
     from app.cache.semantic_cache import get_semantic
     from app.ingestion.embedder import embed_texts
+
+    if _cfg(config, "use_cache") is False:
+        return {"cache_hit": False, "query_embedding": None}
 
     redis_client = _cfg(config, "redis_client")
     session = _cfg(config, "session")
@@ -344,7 +355,7 @@ async def grade_documents_node(state: AgentState, config: RunnableConfig) -> dic
         return {"relevant_chunks": chunks, "retrieve_retries": retries}
 
     excerpts = "\n\n".join(
-        f"[{i}] {c.content[:300]}" for i, c in enumerate(chunks)
+        f"[{i}] {c.content[:_GRADE_CHARS]}" for i, c in enumerate(chunks)
     )
     prompt = (
         "Given the QUERY and DOCUMENT EXCERPTS, identify which excerpts contain "
@@ -493,7 +504,7 @@ async def check_groundedness_node(state: AgentState, config: RunnableConfig) -> 
         return {"grounded": True, "use_strict_prompt": False}
 
     context = "\n\n".join(
-        f"[{c.filename.rsplit('.', 1)[0]}, p.{c.page_number or 1}]\n{c.content[:400]}"
+        f"[{c.filename.rsplit('.', 1)[0]}, p.{c.page_number or 1}]\n{c.content[:_GROUNDEDNESS_CHARS]}"
         for c in relevant_chunks[:5]
     )
 
@@ -549,7 +560,7 @@ async def write_cache_node(state: AgentState, config: RunnableConfig) -> dict:
     Write the final answer to Redis exact cache and pgvector semantic cache.
     Skips: cache hits (already stored), NOT_FOUND answers, non-knowledge-base routes.
     """
-    if state.get("cache_hit") or state.get("llm_busy"):
+    if state.get("cache_hit") or state.get("llm_busy") or _cfg(config, "use_cache") is False:
         return {}
 
     route = state.get("route", "knowledge_base")
@@ -857,10 +868,15 @@ async def invoke_agentic(
     session: AsyncSession,
     history: list[dict] | None = None,
     redis_client=None,
+    use_cache: bool = True,
 ) -> dict:
     """
     Non-streaming invocation for the eval harness.
     Returns the final AgentState dict.
+
+    use_cache=False skips both cache lookups and writes, so every question
+    goes through retrieval and generation (evals must measure the pipeline,
+    not answers cached by an earlier run).
     """
     if not settings.groq_api_key:
         return {"answer": NOT_FOUND_PHRASE, "total_tokens": 0, "chunks": [], "relevant_chunks": []}
@@ -888,6 +904,7 @@ async def invoke_agentic(
             "session": session,
             "groq_client": groq_client,
             "redis_client": redis_client,
+            "use_cache": use_cache,
         },
     )
 

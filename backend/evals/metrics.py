@@ -151,7 +151,9 @@ def faithfulness_judge(
         question=question, context=context_text, answer=answer
     )
     result = _call_judge(client, model, prompt)
-    score = float(result.get("score", 0.0))
+    if result.get("score") is None:
+        return {"score": None, "reasoning": result.get("reasoning", "")}
+    score = float(result["score"])
     return {"score": max(0.0, min(1.0, score)), "reasoning": result.get("reasoning", "")}
 
 
@@ -170,7 +172,9 @@ def answer_correctness_judge(
         question=question, reference=reference, answer=answer
     )
     result = _call_judge(client, model, prompt)
-    raw = int(result.get("score", 1))
+    if result.get("score") is None:
+        return {"score": None, "raw_score": None, "reasoning": result.get("reasoning", "")}
+    raw = int(result["score"])
     raw = max(1, min(5, raw))
     return {
         "score": (raw - 1) / 4.0,
@@ -204,7 +208,8 @@ def _call_judge(client: Groq, model: str, prompt: str) -> dict[str, Any]:
                 log.warning("Judge call failed (attempt %d): %s", attempt + 1, exc)
                 time.sleep(1.0)
     log.error("Judge call failed after %d retries: %s", MAX_JUDGE_RETRIES, last_exc)
-    return {"score": 0, "reasoning": f"judge error: {last_exc}"}
+    # No score at all — a failed judge call must not be averaged in as a 0.
+    return {"score": None, "reasoning": f"judge error: {last_exc}"}
 
 
 def _parse_judge_json(text: str) -> dict[str, Any]:

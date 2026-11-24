@@ -187,3 +187,45 @@ def test_aggregate_metrics_empty():
     agg = aggregate_metrics([])
     assert agg["n"] == 0
     assert agg["context_recall"] == 0.0
+
+
+# ── Sampling and failure handling ────────────────────────────────────────────
+
+
+def test_stratified_sample_covers_every_type_in_order():
+    from evals.run_evals import stratified_sample
+
+    items = (
+        [{"id": f"n{i}", "type": "numeric"} for i in range(5)]
+        + [{"id": f"u{i}", "type": "unanswerable"} for i in range(2)]
+        + [{"id": "a0", "type": "adversarial"}]
+    )
+    picked = stratified_sample(items, 5)
+    assert [p["id"] for p in picked] == ["n0", "u0", "a0", "n1", "u1"]
+    assert stratified_sample(items, 50) == stratified_sample(items, 8)
+
+
+def test_failed_judge_call_returns_none_not_zero():
+    from unittest.mock import MagicMock, patch
+
+    from evals import metrics
+
+    client = MagicMock()
+    client.chat.completions.create.side_effect = RuntimeError("boom")
+    with patch.object(metrics.time, "sleep"):
+        faith = metrics.faithfulness_judge("q", "a", [], client, "m")
+        corr = metrics.answer_correctness_judge("q", "a", "ref", client, "m")
+    assert faith["score"] is None
+    assert corr["score"] is None
+
+
+def test_aggregate_ignores_missing_judge_scores():
+    from evals.metrics import aggregate_metrics
+
+    results = [
+        {"context_recall": 1.0, "citation_accuracy": 1.0, "refusal_accuracy": 1.0,
+         "latency_ms": 10, "total_tokens": 5, "faithfulness": 0.8},
+        {"context_recall": 1.0, "citation_accuracy": 1.0, "refusal_accuracy": 1.0,
+         "latency_ms": 10, "total_tokens": 5, "faithfulness": None},
+    ]
+    assert aggregate_metrics(results)["faithfulness"] == 0.8

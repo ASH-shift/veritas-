@@ -423,3 +423,19 @@ class TestCacheGraphNodes:
         assert result == {}
         # Exact cache should have been called
         pipe.setex.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_check_cache_node_skipped_when_use_cache_false():
+    """Evals pass use_cache=False so cached answers never leak into scores."""
+    from app.agent.graph import check_cache_node, write_cache_node
+
+    redis = MagicMock()
+    cfg = {"configurable": {"redis_client": redis, "session": MagicMock(), "use_cache": False}}
+    out = await check_cache_node({"query": "q", "workspace_id": 1}, cfg)
+    assert out["cache_hit"] is False
+    redis.get.assert_not_called()
+
+    state = {"answer": "18 days [leave_policy:1]", "route": "knowledge_base", "query": "q"}
+    assert await write_cache_node(state, cfg) == {}
+    redis.pipeline.assert_not_called()

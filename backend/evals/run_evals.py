@@ -29,6 +29,9 @@ from typing import Any, Literal
 
 from groq import Groq
 
+from app.agent.llm_params import reasoning_kwargs
+from app.agent.prompts import normalize_citations
+
 # ── Logging ───────────────────────────────────────────────────────────────────
 
 logging.basicConfig(
@@ -61,14 +64,38 @@ GROQ_RETRY_BASE = 2.0  # seconds
 # ── Dataset loading ───────────────────────────────────────────────────────────
 
 
-def load_dataset(path: Path, limit: int | None = None) -> list[dict[str, Any]]:
+def stratified_sample(items: list[dict[str, Any]], n: int) -> list[dict[str, Any]]:
+    """
+    Deterministic sample of n questions that keeps every question type
+    represented: take questions round-robin across types, in dataset order.
+    (The dataset is grouped by type, so the first n would be all 'numeric'.)
+    """
+    by_type: dict[str, list[dict[str, Any]]] = {}
+    for item in items:
+        by_type.setdefault(item["type"], []).append(item)
+    queues = list(by_type.values())
+    picked: list[dict[str, Any]] = []
+    i = 0
+    while len(picked) < n and any(queues):
+        q = queues[i % len(queues)]
+        if q:
+            picked.append(q.pop(0))
+        i += 1
+    return picked
+
+
+def load_dataset(
+    path: Path, limit: int | None = None, sample: int | None = None
+) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     with open(path, encoding="utf-8") as fh:
         for line in fh:
             line = line.strip()
             if line:
                 items.append(json.loads(line))
-    if limit:
+    if sample:
+        items = stratified_sample(items, sample)
+    elif limit:
         items = items[:limit]
     log.info("Loaded %d questions from %s", len(items), path)
     return items
@@ -93,8 +120,10 @@ def groq_generate(
                 messages=messages,  # type: ignore[arg-type]
                 temperature=0.1,
                 max_tokens=1024,
+                **reasoning_kwargs(model),
             )
-            text = resp.choices[0].message.content or ""
+            # Same post-processing as the API path ([doc:page] citations).
+            text = normalize_citations(resp.choices[0].message.content or "")
             tokens = resp.usage.total_tokens if resp.usage else 0
             return text, tokens
         except Exception as exc:
@@ -155,6 +184,16 @@ def chunk_to_dict(chunk: Any) -> dict[str, Any]:
     }
 
 
+def _failed(qid: str, q_type: str, reason: str) -> dict[str, Any]:
+    """
+    Marker for a question that could not be answered because of an API error
+    (e.g. rate limits). It is excluded from the metrics and not cached, so a
+    re-run retries it — an infrastructure failure must not count as a wrong
+    or refused answer.
+    """
+    return {"id": qid, "type": q_type, "error": reason}
+
+
 # ── Core evaluation loop ──────────────────────────────────────────────────────
 
 
@@ -201,13 +240,16 @@ async def evaluate_question(
                 query=question,
                 workspace_id=1,
                 session=session,
+                use_cache=False,
             )
             chunks = final_state.get("relevant_chunks") or final_state.get("chunks", [])
             answer = final_state.get("answer", NOT_FOUND_PHRASE)
             total_tokens = final_state.get("total_tokens", 0)
+            if final_state.get("llm_busy"):
+                return _failed(qid, q_type, "all models rate limited")
         except Exception as exc:
             log.error("Agentic pipeline failed for %s: %s", qid, exc)
-            answer = NOT_FOUND_PHRASE
+            return _failed(qid, q_type, str(exc))
 
     else:
         from app.agent.prompts import build_rag_messages
@@ -237,7 +279,7 @@ async def evaluate_question(
             answer, total_tokens = groq_generate(groq_client, llm_model, messages)
         except Exception as exc:
             log.error("Generation failed for %s: %s", qid, exc)
-            answer = NOT_FOUND_PHRASE
+            return _failed(qid, q_type, str(exc))
 
     latency_ms = (time.perf_counter() - t0) * 1000.0
 
@@ -293,7 +335,12 @@ async def evaluate_question(
             result["faithfulness"] = r_acc
             result["answer_correctness"] = r_acc
 
-    save_cached(config, qid, result)
+    # Only cache complete results, so a re-run retries failed judge calls.
+    judge_missing = run_judge and (
+        result.get("faithfulness", 0) is None or result.get("answer_correctness", 0) is None
+    )
+    if not judge_missing:
+        save_cached(config, qid, result)
     log.info(
         "  [%s] %s | recall=%.2f cit=%.2f refusal=%.2f lat=%.0fms",
         qid,
@@ -374,6 +421,9 @@ def write_markdown_report(
     lines.append("| " + " | ".join(["---"] * len(cols)) + " |")
 
     for r in results:
+        if r.get("error"):
+            lines.append(f"| {r['id']} | {r['type']} | _API error, excluded: {r['error'][:60]}_ |")
+            continue
         row = [
             r["id"],
             r["type"],
@@ -384,10 +434,12 @@ def write_markdown_report(
         ]
         if has_judge:
             row.append(
-                f"{r['faithfulness']:.2f}" if "faithfulness" in r else "—"
+                f"{r['faithfulness']:.2f}" if r.get("faithfulness") is not None else "—"
             )
             row.append(
-                f"{r['answer_correctness']:.2f}" if "answer_correctness" in r else "—"
+                f"{r['answer_correctness']:.2f}"
+                if r.get("answer_correctness") is not None
+                else "—"
             )
         lines.append("| " + " | ".join(str(v) for v in row) + " |")
 
@@ -411,6 +463,7 @@ async def run(
     limit: int | None,
     run_judge: bool,
     clear_cache: bool,
+    sample: int | None = None,
 ) -> None:
     from app.core.config import get_settings
     from app.db.session import AsyncSessionLocal
@@ -430,7 +483,7 @@ async def run(
             p.unlink()
         log.info("Cache cleared for config=%s", config)
 
-    items = load_dataset(DATASET_PATH, limit)
+    items = load_dataset(DATASET_PATH, limit, sample)
     timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
 
     results: list[dict[str, Any]] = []
@@ -451,8 +504,17 @@ async def run(
             # Small inter-question delay to stay under Groq free-tier rate limits
             await asyncio.sleep(0.5)
 
-    aggregated = aggregate_metrics(results)
+    failed = [r for r in results if r.get("error")]
+    scored = [r for r in results if not r.get("error")]
+    if failed:
+        log.warning(
+            "%d question(s) failed with API errors and are excluded: %s",
+            len(failed), [r["id"] for r in failed],
+        )
+    aggregated = aggregate_metrics(scored)
+    aggregated["errors"] = len(failed)
     log.info("Aggregated metrics for config=%s: %s", config, aggregated)
+    results = scored + failed
 
     write_json_report(config, results, aggregated, timestamp)
     write_markdown_report(config, results, aggregated, timestamp)
@@ -473,6 +535,12 @@ def main() -> None:
         help="Maximum number of questions to evaluate (default: all)",
     )
     parser.add_argument(
+        "--sample",
+        type=int,
+        default=None,
+        help="Evaluate a deterministic sample of N questions covering every type",
+    )
+    parser.add_argument(
         "--no-judge",
         action="store_true",
         help="Skip LLM-as-judge metrics (faithfulness, answer correctness)",
@@ -490,6 +558,7 @@ def main() -> None:
             limit=args.limit,
             run_judge=not args.no_judge,
             clear_cache=args.clear_cache,
+            sample=args.sample,
         )
     )
 
