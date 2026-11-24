@@ -620,3 +620,39 @@ async def test_agentic_rag_cache_hit_returns_cached_citations():
     cites = next(e for e in events if e["type"] == "citations")["citations"]
     assert cites == [{"filename": "leave_policy.md", "page": 1, "snippet": "s"}]
     assert events[-1]["cache_hit"] is True
+
+
+# ── Router is workspace-agnostic ──────────────────────────────────────────────
+
+
+def test_route_prompt_is_not_tied_to_demo_company():
+    from app.agent.graph import _ROUTE_PROMPT
+
+    assert "NimbusWorks" not in _ROUTE_PROMPT
+    assert "{documents}" in _ROUTE_PROMPT
+
+
+@pytest.mark.asyncio
+async def test_route_query_includes_workspace_document_names():
+    from unittest.mock import patch as _patch
+
+    from app.agent import graph as graph_mod
+
+    session = MagicMock()
+    result = MagicMock()
+    result.all.return_value = [("Arpit_Sharma_Resume.pdf",)]
+    session.execute = AsyncMock(return_value=result)
+    captured = {}
+
+    async def fake_json_call(client, model, prompt):
+        captured["prompt"] = prompt
+        return {"route": "knowledge_base"}
+
+    with _patch.object(graph_mod, "_json_llm_call", side_effect=fake_json_call):
+        out = await graph_mod.route_query_node(
+            {"query": "arpit internship company name", "workspace_id": 2},
+            {"configurable": {"groq_client": MagicMock(), "session": session}},
+        )
+
+    assert out["route"] == "knowledge_base"
+    assert "Arpit_Sharma_Resume.pdf" in captured["prompt"]

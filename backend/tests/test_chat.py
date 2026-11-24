@@ -258,3 +258,18 @@ def test_normalize_citations_maps_fullwidth_brackets():
     assert normalize_citations(text) == "Hotels up to $200 per night [expense_policy:1]."
     chunks = [make_chunk(filename="expense_policy.md", page=1)]
     assert len(_parse_citations(normalize_citations(text), chunks)) == 1
+
+
+def test_normalize_citations_page_style_and_narrow_spaces():
+    from app.agent.prompts import normalize_citations
+
+    text = "Fitelo\u202f[Arpit_Sharma_Resume, page\u202f1] and [hr_policy, p. 3]"
+    assert normalize_citations(text) == "Fitelo [Arpit_Sharma_Resume:1] and [hr_policy:3]"
+
+
+def test_context_excerpts_labelled_with_citation_tag():
+    from app.agent.prompts import build_rag_messages
+
+    msgs = build_rag_messages("q", [make_chunk(filename="leave_policy.md", page=2)])
+    assert "[leave_policy:2]" in msgs[-1]["content"]
+    assert "page 2]" not in msgs[-1]["content"]

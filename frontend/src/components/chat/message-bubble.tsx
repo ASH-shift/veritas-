@@ -8,8 +8,10 @@ import { cn } from "@/lib/utils";
 import { AgentSteps } from "./agent-steps";
 import type { ChatMessage } from "./types";
 
-// Citations appear inline as [doc_name:page], e.g. [leave_policy:2].
-const CITATION_RE = /\[([^\]:\s]+):(\d+)\]/g;
+// Citations appear inline as [doc_name:page], e.g. [leave_policy:2]. Streamed
+// answers can also contain the variant [doc_name, page 2], which the backend
+// only normalises after the stream ends, so accept both forms here.
+const CITATION_RE = /\[([^\[\]:,\s]+)(?::|\s*,\s*(?:page|p\.?)\s*)(\d+)\]/gi;
 
 function stem(filename: string) {
   return filename.replace(/\.[^.]+$/, "");

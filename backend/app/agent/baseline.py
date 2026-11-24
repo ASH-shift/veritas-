@@ -174,7 +174,9 @@ async def baseline_rag(
         return
 
     # ── 4. Parse citations ────────────────────────────────────────────────────
-    citations = _parse_citations(full_answer, chunks)
+    # Normalise the whole answer too: a "[doc, page N]" citation can be split
+    # across streamed tokens, so per-token normalisation can miss it.
+    citations = _parse_citations(normalize_citations(full_answer), chunks)
     yield {
         "type": "citations",
         "citations": [

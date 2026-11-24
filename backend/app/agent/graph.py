@@ -256,16 +256,52 @@ async def rewrite_query_node(state: AgentState, config: RunnableConfig) -> dict:
 # ── Node: route_query ─────────────────────────────────────────────────────────
 
 
+# Workspace-agnostic: each user's workspace can hold any kind of document
+# (policies, resumes, manuals, notes). An earlier version described only the
+# demo company's policies, so questions about a user's own uploads (e.g. a
+# resume) were routed out_of_scope and never searched.
 _ROUTE_PROMPT = """\
+You route questions for an assistant that answers ONLY from the user's uploaded documents.
+
+DOCUMENTS IN THIS WORKSPACE:
+{documents}
+
 Classify the QUERY into exactly one category:
-- knowledge_base: questions about NimbusWorks company policies, HR, benefits, expenses, \
-security, engineering, travel, onboarding, data handling, or any internal topics
-- out_of_scope: questions unrelated to company knowledge (stock prices, news, personal advice)
-- chitchat: casual greetings, small talk, or thank-you messages
+- knowledge_base: anything that could plausibly be answered from these documents — about \
+their topics, people, organisations, facts, numbers or content. When unsure, choose this.
+- out_of_scope: clearly unrelated to every document above (e.g. live stock prices, today's \
+news, general trivia, coding help)
+- chitchat: greetings, small talk or thank-you messages with no information request
 
 Return only valid JSON: {{"route": "<knowledge_base|out_of_scope|chitchat>", "reasoning": "<brief>"}}
 
 QUERY: {query}"""
+
+_MAX_ROUTE_DOCS = 30
+
+
+async def _workspace_document_names(session: AsyncSession | None, workspace_id: int) -> str:
+    """Filenames of ready documents, so the router knows what the workspace covers."""
+    if session is None:
+        return "(unknown)"
+    from sqlalchemy import select
+
+    from app.db.models import Document, DocumentStatus
+
+    try:
+        result = await session.execute(
+            select(Document.filename)
+            .where(
+                Document.workspace_id == workspace_id,
+                Document.status == DocumentStatus.ready,
+            )
+            .limit(_MAX_ROUTE_DOCS)
+        )
+        names = [row[0] for row in result.all()]
+    except Exception as exc:
+        log.warning("route_query: could not list documents: %s", exc)
+        return "(unknown)"
+    return "\n".join(f"- {n}" for n in names) if names else "(none)"
 
 
 async def route_query_node(state: AgentState, config: RunnableConfig) -> dict:
@@ -276,9 +312,14 @@ async def route_query_node(state: AgentState, config: RunnableConfig) -> dict:
     if client is None:
         return {"route": "knowledge_base"}
 
+    documents = await _workspace_document_names(
+        _cfg(config, "session"), state.get("workspace_id", 1)
+    )
     try:
         result = await _json_llm_call(
-            client, settings.llm_fast_model, _ROUTE_PROMPT.format(query=query)
+            client,
+            settings.llm_fast_model,
+            _ROUTE_PROMPT.format(query=query, documents=documents),
         )
         route = result.get("route", "knowledge_base")
         if route not in ("knowledge_base", "out_of_scope", "chitchat"):

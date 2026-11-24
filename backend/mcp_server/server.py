@@ -71,8 +71,8 @@ _MAX_TOP_K: int = 20
 mcp = MCPServer(
     "Veritas Knowledge Base",
     instructions=(
-        "Use these tools to search NimbusWorks internal documentation, ask "
-        "policy questions, and discover available documents. Always cite your "
+        "Use these tools to search the documents in this Veritas workspace, ask "
+        "questions, and discover available documents. Always cite your "
         "sources using the [doc_name:page] format returned by the tools."
     ),
 )
@@ -232,8 +232,7 @@ async def ask_copilot(
     The copilot retrieves relevant context, checks groundedness, and cites sources.
 
     Args:
-        question: A question about NimbusWorks policies, procedures, or any
-                  topic covered by the uploaded documents.
+        question: A question about any topic covered by the uploaded documents.
         api_key:  MCP_API_KEY value (required when server is configured with auth).
     """
     if err := _check_auth(api_key):
