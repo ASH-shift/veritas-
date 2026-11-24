@@ -1,0 +1,21 @@
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv*/
+*.egg-info/
+
+# Eval run cache (reports in evals/reports/ ARE committed)
+backend/evals/.cache/
+
+# Local tooling
+.vscode/
+.DS_Store
+Thumbs.db
