@@ -1,0 +1,71 @@
+NIMBUSWORKS IT ACCEPTABLE USE POLICY
+Version 2.0 | Effective: January 1, 2024
+
+1. PURPOSE
+
+This policy defines acceptable use of NimbusWorks information technology resources, including company-owned devices, network infrastructure, cloud services, and communication systems. All employees, contractors, and third-party users with access to NimbusWorks systems must comply with this policy.
+
+2. ACCEPTABLE USE
+
+Company IT resources are provided to support business activities. Incidental personal use is permitted within reasonable limits, provided it:
+- Does not interfere with job responsibilities
+- Does not consume significant network bandwidth or storage
+- Does not involve any prohibited activities listed in Section 4
+
+Employees are expected to use company resources professionally and ethically at all times.
+
+3. COMPANY-OWNED DEVICES
+
+Employees are issued company laptops and may receive a mobile device based on their role. These devices:
+- Must not be used by household members, friends, or other non-employees
+- Must have the company MDM profile installed and active at all times
+- Must not have the MDM profile removed or circumvented
+- Must be kept physically secure (locked when unattended, secured during travel)
+- Must use full-disk encryption as configured by IT
+
+Employees leaving the company must return all company devices within 5 business days of their final working day. Lost or stolen devices must be reported to IT (it@nimbusworks.com) and Security (security@nimbusworks.com) within 2 hours of discovery.
+
+4. PROHIBITED ACTIVITIES
+
+The following activities are strictly prohibited using NimbusWorks IT resources:
+- Accessing, storing, or transmitting illegal content of any kind
+- Installing unauthorized software or circumventing security controls
+- Using company resources for cryptocurrency mining
+- Accessing systems or data you are not authorized to access (even if technically possible)
+- Sharing login credentials with any other person
+- Using company email for mass marketing, spam, or unsolicited communications
+- Running personal servers, websites, or services on company infrastructure
+- Accessing unauthorized streaming services, gaming platforms, or social media in a way that consumes excessive bandwidth
+- Any activity that violates NimbusWorks Code of Conduct or applicable law
+
+5. SOFTWARE INSTALLATION
+
+Only software in the approved catalog (available via Jamf Self Service) may be installed on company laptops without IT approval. To request new software:
+1. Submit a request at it.nimbusworks.com/software-request
+2. IT will evaluate security, licensing, and compatibility
+3. Approval or denial within 3 business days
+
+6. NETWORK AND INTERNET USE
+
+The company network (wired and Wi-Fi) is monitored for security purposes. Employees should have no expectation of privacy when using company networks.
+
+When working remotely, the company VPN must be used for all access to internal systems. See the Information Security Policy for VPN requirements.
+
+7. EMAIL AND COMMUNICATION
+
+Company email is the official channel for business communication. Employees must not use personal email accounts for business purposes involving confidential or sensitive information. Email communications may be retained for legal and compliance purposes.
+
+8. MONITORING
+
+NimbusWorks reserves the right to monitor usage of company IT resources, including email, network traffic, and device activity, for security and compliance purposes. Monitoring is conducted in accordance with applicable law and with appropriate privacy protections for employees in jurisdictions with privacy rights.
+
+9. VIOLATIONS
+
+Violations of this policy may result in disciplinary action up to and including termination of employment. Serious violations may also result in legal action. Suspected violations should be reported to IT (it@nimbusworks.com) or HR (hr@nimbusworks.com).
+
+10. ACKNOWLEDGMENT
+
+Employees must acknowledge this policy annually through the HR portal. Failure to acknowledge the policy within 30 days of the due date may result in temporary suspension of network access.
+
+---
+For questions: it@nimbusworks.com | IT Help Desk: it.nimbusworks.com
